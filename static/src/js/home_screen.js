@@ -51,6 +51,7 @@ function getGreeting() {
 
 export class HomeScreen extends Component {
     static template = "web_home_enterprise.HomeScreen";
+    static props = {};
 
     setup() {
         this.orm      = useService("orm");
@@ -173,29 +174,28 @@ export class HomeScreen extends Component {
     }
 
     _buildAppEntry(menuId, menu) {
-        // Saltar entradas que no sean apps (sin web_icon y sin hijos y sin action)
         const hasIcon = menu.web_icon || menu.web_icon_data;
         const hasChildren = menu.children && menu.children.length > 0;
         if (!hasIcon && !hasChildren && !menu.action) return null;
 
-        // Construir URL del ícono de la forma más confiable posible en Odoo 19
         let iconUrl = null;
         let iconData = null;
 
         if (menu.web_icon_data) {
-            // Base64 directo
+            // Base64 directo — más confiable
             iconData = menu.web_icon_data;
         } else if (menu.web_icon) {
-            // Puede ser "module,fa-icon" o "module,path" o simplemente una URL
             const parts = menu.web_icon.split(',');
             if (parts.length === 2) {
                 const [mod, icon] = parts.map(p => p.trim());
                 if (icon.startsWith('fa-')) {
-                    // Font awesome — sin imagen, usamos fallback con color
+                    // Font Awesome — sin imagen, usa fallback con color
                     iconUrl = null;
                 } else if (icon.startsWith('/')) {
+                    // Ruta absoluta — usar directamente sin concatenar módulo
                     iconUrl = icon;
-                } else if (icon) {
+                } else {
+                    // Ruta relativa — construir correctamente
                     iconUrl = `/${mod}/static/description/${icon}`;
                 }
             } else if (menu.web_icon.startsWith('/') || menu.web_icon.startsWith('http')) {
@@ -203,9 +203,9 @@ export class HomeScreen extends Component {
             }
         }
 
-        // Si no tenemos data ni url, intentamos el endpoint de imagen del menú
+        // Fallback al endpoint correcto (web_icon_data, no web_icon)
         if (!iconData && !iconUrl) {
-            iconUrl = `/web/image/ir.ui.menu/${menuId}/web_icon`;
+            iconUrl = `/web/image/ir.ui.menu/${menuId}/web_icon_data`;
         }
 
         return {
@@ -239,7 +239,7 @@ export class HomeScreen extends Component {
             if (!menu.id) continue;
             const iconUrl = menu.webIconData
                 ? null
-                : `/web/image/ir.ui.menu/${menu.id}/web_icon`;
+                : `/web/image/ir.ui.menu/${menu.id}/web_icon_data`;
             apps.push({
                 id: menu.id,
                 name: menu.name,
@@ -301,7 +301,6 @@ export class HomeScreen extends Component {
 
     openApp(ev, app) {
         ev.stopPropagation();
-        // Intentar con menu service primero
         const menuMethods = ['selectMenu', 'selectAppMenu', 'toggleMenu'];
         for (const method of menuMethods) {
             if (typeof this.menu[method] === 'function') {
@@ -322,7 +321,6 @@ export class HomeScreen extends Component {
     }
 
     onIconError(ev, app) {
-        // Si falla el icono, quitarlo para usar fallback
         ev.target.style.display = 'none';
         app.iconUrl = null;
         app.iconData = null;
@@ -333,7 +331,6 @@ export class HomeScreen extends Component {
     // ============================================================
 
     openNativeMenu() {
-        // El botón hamburguesa de Odoo es .o_menu_toggle o .o_main_navbar .o_menu_brand
         const hamburger = document.querySelector(
             '.o_menu_toggle, .o_main_navbar .o_menu_toggle, button.o_menu_toggle'
         );
@@ -341,7 +338,6 @@ export class HomeScreen extends Component {
             hamburger.click();
             return;
         }
-        // Alternativa: disparar evento que el shell de Odoo escucha
         document.dispatchEvent(new CustomEvent('toggle-home-menu', { bubbles: true }));
     }
 
@@ -368,7 +364,6 @@ export class HomeScreen extends Component {
 
     openPreferences() {
         this.state.showUserMenu = false;
-        // Abre el formulario de preferencias del usuario actual
         this.action.doAction({
             type: 'ir.actions.act_window',
             res_model: 'res.users',
@@ -455,5 +450,5 @@ export class HomeScreen extends Component {
     }
 }
 
-// Registrar como acción cliente (no como menú raíz)
+// Registrar como acción cliente
 registry.category("actions").add("web_home_enterprise.HomeScreen", HomeScreen);
