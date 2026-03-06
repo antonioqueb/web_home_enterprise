@@ -35,6 +35,7 @@ export class HomeScreen extends Component {
     setup() {
         this.orm = useService("orm");
         this.action = useService("action");
+        this.menu = useService("menu");
         this.notification = useService("notification");
         this.appsGrid = useRef("appsGrid");
 
@@ -46,7 +47,7 @@ export class HomeScreen extends Component {
             showUserMenu: false,
             draggingId: null,
             dragOverId: null,
-            backgroundStyle: '',
+            backgroundStyle: 'background: linear-gradient(135deg, #714B67 0%, #3d1f4d 40%, #1a0a2e 100%);',
             userName: session.name || 'User',
             userEmail: session.partner_display_name || '',
             userAvatar: session.uid ? `/web/image/res.users/${session.uid}/avatar_128` : null,
@@ -76,6 +77,10 @@ export class HomeScreen extends Component {
     get userInitials() { return getInitials(this.state.userName); }
     get currentYear() { return new Date().getFullYear(); }
 
+    // ============================================================
+    // SETTINGS & BACKGROUND
+    // ============================================================
+
     async _loadSettings() {
         try {
             const res = await fetch('/web/home/get_settings', {
@@ -95,57 +100,83 @@ export class HomeScreen extends Component {
 
     _applyBackground(settings) {
         const type = settings.background_type || 'gradient';
-        let style = '';
-        if (type === 'gradient') {
-            style = 'background: linear-gradient(135deg, #714B67 0%, #3d1f4d 40%, #1a0a2e 100%);';
-        } else if (type === 'solid') {
+        if (type === 'solid') {
             const color = settings.background_color || '#6C2EB9';
-            style = `background: ${color};`;
+            this.state.backgroundStyle = `background: ${color};`;
         } else if (type === 'image' && settings.background_image_url) {
-            style = `background: url('${settings.background_image_url}') center center / cover no-repeat;`;
+            this.state.backgroundStyle = `background: url('${settings.background_image_url}') center center / cover no-repeat;`;
         } else {
-            style = 'background: linear-gradient(135deg, #714B67 0%, #3d1f4d 40%, #1a0a2e 100%);';
+            this.state.backgroundStyle = 'background: linear-gradient(135deg, #714B67 0%, #3d1f4d 40%, #1a0a2e 100%);';
         }
-        this.state.backgroundStyle = style;
     }
+
+    // ============================================================
+    // MENU LOADING — usa menu service de Odoo directamente
+    // ============================================================
 
     async _loadApps() {
         try {
-            const menus = await this.orm.call('ir.ui.menu', 'load_menus', [false]);
-            const apps = this._processMenus(menus);
+            // El menu service ya tiene los menús cargados
+            const menuData = this.menu.getMenuAsTree("root");
+            const apps = this._processMenuTree(menuData);
             const ordered = this._applyUserOrder(apps);
             this.state.apps = ordered;
             this.state.filteredApps = [...ordered];
         } catch (e) {
-            console.error('[HomeScreen] Failed to load apps', e);
-            this.state.apps = [];
-            this.state.filteredApps = [];
+            console.error('[HomeScreen] Failed to load apps via menu service, trying fallback', e);
+            await this._loadAppsFallback();
         } finally {
             this.state.loading = false;
         }
     }
 
-    _processMenus(menuData) {
-        if (!menuData || !menuData.root) return [];
+    _processMenuTree(menuTree) {
+        // menuTree.childrenTree son los apps de primer nivel
+        const children = menuTree.childrenTree || menuTree.children || [];
         const apps = [];
-        const rootChildren = menuData.root.children || [];
-        for (const menuId of rootChildren) {
-            const menu = menuData[menuId];
-            if (!menu) continue;
-            const isApp = menu.web_icon || menu.action || (menu.children && menu.children.length > 0);
-            if (!isApp) continue;
+        for (const menu of children) {
+            if (!menu.id) continue;
             apps.push({
-                id: menuId,
+                id: menu.id,
                 name: menu.name,
                 xmlid: menu.xmlid || '',
-                action: menu.action,
-                web_icon: menu.web_icon,
-                web_icon_data: menu.web_icon_data || null,
-                color: getAppColor(menuId),
+                appID: menu.appID || menu.id,
+                web_icon: menu.webIconData ? null : (menu.webIcon || null),
+                web_icon_data: menu.webIconData || null,
+                color: getAppColor(menu.id),
                 initials: getInitials(menu.name),
             });
         }
         return apps;
+    }
+
+    async _loadAppsFallback() {
+        // Fallback: leer load_menus directamente
+        try {
+            const menuData = await this.orm.call('ir.ui.menu', 'load_menus', [false]);
+            if (!menuData || !menuData.root) return;
+            const apps = [];
+            for (const menuId of (menuData.root.children || [])) {
+                const menu = menuData[menuId];
+                if (!menu) continue;
+                if (!menu.web_icon && !menu.action && !(menu.children && menu.children.length)) continue;
+                apps.push({
+                    id: menuId,
+                    name: menu.name,
+                    xmlid: menu.xmlid || '',
+                    appID: menuId,
+                    web_icon: menu.web_icon || null,
+                    web_icon_data: menu.web_icon_data || null,
+                    color: getAppColor(menuId),
+                    initials: getInitials(menu.name),
+                });
+            }
+            const ordered = this._applyUserOrder(apps);
+            this.state.apps = ordered;
+            this.state.filteredApps = [...ordered];
+        } catch (e) {
+            console.error('[HomeScreen] Fallback also failed', e);
+        }
     }
 
     _applyUserOrder(apps) {
@@ -153,13 +184,13 @@ export class HomeScreen extends Component {
         if (!order.length) return apps;
         const appMap = {};
         for (const app of apps) {
-            appMap[app.id] = app;
+            appMap[String(app.id)] = app;
             if (app.xmlid) appMap[app.xmlid] = app;
         }
         const ordered = [];
         const placed = new Set();
         for (const key of order) {
-            const app = appMap[key];
+            const app = appMap[String(key)];
             if (app && !placed.has(app.id)) {
                 ordered.push(app);
                 placed.add(app.id);
@@ -171,18 +202,18 @@ export class HomeScreen extends Component {
         return ordered;
     }
 
+    // ============================================================
+    // SEARCH
+    // ============================================================
+
     onSearchInput(ev) {
         const q = (ev.target.value || '').toLowerCase().trim();
         this.state.searchQuery = q;
-        this._filterApps(q);
-    }
-
-    _filterApps(query) {
-        if (!query) {
+        if (!q) {
             this.state.filteredApps = [...this.state.apps];
         } else {
             this.state.filteredApps = this.state.apps.filter(app =>
-                app.name.toLowerCase().includes(query)
+                app.name.toLowerCase().includes(q)
             );
         }
     }
@@ -192,18 +223,27 @@ export class HomeScreen extends Component {
         this.state.filteredApps = [...this.state.apps];
     }
 
+    // ============================================================
+    // APP NAVIGATION — usa menu service para navegar
+    // ============================================================
+
     openApp(ev, app) {
-        if (app.action) {
-            this.action.doAction(app.action);
-        } else {
-            this.action.doAction({
-                type: 'ir.actions.act_url',
-                url: `/odoo/${app.xmlid || app.id}`,
-                target: 'self',
-            }).catch(() => {
-                const event = new CustomEvent('menu-clicked', { detail: { id: app.id } });
-                document.dispatchEvent(event);
-            });
+        ev.stopPropagation();
+        try {
+            // Navegar usando el menu service — la forma correcta en Odoo 19
+            this.menu.selectMenu(app.id);
+        } catch (e) {
+            console.warn('[HomeScreen] menu.selectMenu failed, trying selectAppMenu', e);
+            try {
+                // Algunos builds usan selectAppMenu
+                this.menu.selectAppMenu(app.id);
+            } catch (e2) {
+                console.warn('[HomeScreen] selectAppMenu failed, trying doAction', e2);
+                // Último fallback
+                if (app.xmlid) {
+                    window.location.href = `/odoo/${app.xmlid}`;
+                }
+            }
         }
     }
 
@@ -212,6 +252,10 @@ export class HomeScreen extends Component {
         app.web_icon = null;
         app.web_icon_data = null;
     }
+
+    // ============================================================
+    // USER MENU
+    // ============================================================
 
     toggleUserMenu() {
         this.state.showUserMenu = !this.state.showUserMenu;
@@ -251,6 +295,10 @@ export class HomeScreen extends Component {
     onLogout() {
         window.location.href = '/web/session/logout';
     }
+
+    // ============================================================
+    // DRAG & DROP
+    // ============================================================
 
     onDragStart(ev, app) {
         this._dragSrcApp = app;
@@ -297,13 +345,12 @@ export class HomeScreen extends Component {
     async _saveAppOrder(apps) {
         try {
             const orderIds = apps.map(a => a.xmlid || a.id);
-            const orderJson = JSON.stringify(orderIds);
             await fetch('/web/home/save_app_order', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     jsonrpc: '2.0', method: 'call', id: 1,
-                    params: { order_json: orderJson }
+                    params: { order_json: JSON.stringify(orderIds) }
                 }),
             });
         } catch (e) {
