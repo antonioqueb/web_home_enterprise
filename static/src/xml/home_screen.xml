@@ -2,12 +2,11 @@
 <templates xml:space="preserve">
 
     <t t-name="web_home_enterprise.HomeScreen">
-        <div class="o_home_enterprise_screen" t-att-style="backgroundStyle">
-            <!-- Navbar overlay -->
+        <div class="o_home_enterprise_screen" t-att-style="state.backgroundStyle">
             <div class="o_home_navbar">
                 <div class="o_home_navbar_brand">
-                    <img t-if="companyLogo" t-att-src="companyLogo" class="o_home_company_logo" alt="Company"/>
-                    <span class="o_home_company_name" t-esc="companyName"/>
+                    <img t-if="state.companyLogo" t-att-src="state.companyLogo" class="o_home_company_logo" alt="Company"/>
+                    <span class="o_home_company_name" t-esc="state.companyName"/>
                 </div>
                 <div class="o_home_navbar_center">
                     <div class="o_home_search_wrapper">
@@ -16,29 +15,29 @@
                             type="text"
                             class="o_home_search_input"
                             placeholder="Search apps..."
-                            t-model="searchQuery"
+                            t-att-value="state.searchQuery"
                             t-on-input="onSearchInput"
                         />
-                        <span t-if="searchQuery" class="o_home_search_clear" t-on-click="clearSearch">
+                        <span t-if="state.searchQuery" class="o_home_search_clear" t-on-click="clearSearch">
                             <i class="fa fa-times"/>
                         </span>
                     </div>
                 </div>
                 <div class="o_home_navbar_right">
                     <div class="o_home_user_menu" t-on-click="toggleUserMenu">
-                        <img t-if="userAvatar" t-att-src="userAvatar" class="o_home_user_avatar" alt="User"/>
+                        <img t-if="state.userAvatar" t-att-src="state.userAvatar" class="o_home_user_avatar" alt="User"/>
                         <div t-else="" class="o_home_user_avatar_placeholder">
                             <t t-esc="userInitials"/>
                         </div>
-                        <span class="o_home_username" t-esc="userName"/>
+                        <span class="o_home_username" t-esc="state.userName"/>
                         <i class="fa fa-chevron-down o_home_chevron"/>
                     </div>
-                    <div class="o_home_user_dropdown" t-if="showUserMenu">
+                    <div class="o_home_user_dropdown" t-if="state.showUserMenu">
                         <div class="o_home_user_dropdown_header">
-                            <img t-if="userAvatar" t-att-src="userAvatar" class="o_home_dropdown_avatar" alt="User"/>
+                            <img t-if="state.userAvatar" t-att-src="state.userAvatar" class="o_home_dropdown_avatar" alt="User"/>
                             <div class="o_home_dropdown_user_info">
-                                <span class="o_home_dropdown_name" t-esc="userName"/>
-                                <span class="o_home_dropdown_email" t-esc="userEmail"/>
+                                <span class="o_home_dropdown_name" t-esc="state.userName"/>
+                                <span class="o_home_dropdown_email" t-esc="state.userEmail"/>
                             </div>
                         </div>
                         <div class="o_home_user_dropdown_divider"/>
@@ -56,9 +55,7 @@
                 </div>
             </div>
 
-            <!-- Main content -->
             <div class="o_home_main">
-                <!-- Greeting -->
                 <div class="o_home_greeting">
                     <h1 class="o_home_greeting_title">
                         <t t-esc="greetingText"/>, <span class="o_home_greeting_name" t-esc="userFirstName"/>
@@ -66,28 +63,27 @@
                     <p class="o_home_greeting_subtitle">What would you like to work on today?</p>
                 </div>
 
-                <!-- App grid -->
                 <div class="o_home_apps_container">
-                    <t t-if="loading">
+                    <t t-if="state.loading">
                         <div class="o_home_loading">
                             <div class="o_home_spinner"/>
                             <p>Loading applications...</p>
                         </div>
                     </t>
                     <t t-else="">
-                        <t t-if="filteredApps.length === 0">
+                        <t t-if="state.filteredApps.length === 0">
                             <div class="o_home_no_results">
                                 <i class="fa fa-search fa-3x"/>
-                                <p>No apps found for "<t t-esc="searchQuery"/>"</p>
+                                <p>No apps found for "<t t-esc="state.searchQuery"/>"</p>
                             </div>
                         </t>
                         <div t-else="" class="o_home_apps_grid" t-ref="appsGrid">
-                            <t t-foreach="filteredApps" t-as="app" t-key="app.id">
+                            <t t-foreach="state.filteredApps" t-as="app" t-key="app.id">
                                 <div
                                     class="o_home_app_card"
                                     t-att-data-app-id="app.id"
-                                    t-att-class="{'o_home_app_dragging': draggingId === app.id, 'o_home_app_drag_over': dragOverId === app.id}"
-                                    t-att-draggable="!searchQuery ? 'true' : 'false'"
+                                    t-att-class="{o_home_app_dragging: state.draggingId === app.id, o_home_app_drag_over: state.dragOverId === app.id}"
+                                    t-att-draggable="!state.searchQuery ? 'true' : 'false'"
                                     t-on-dragstart="(ev) => this.onDragStart(ev, app)"
                                     t-on-dragover="(ev) => this.onDragOver(ev, app)"
                                     t-on-dragleave="onDragLeave"
@@ -118,7 +114,7 @@
                                         </t>
                                     </div>
                                     <span class="o_home_app_name" t-esc="app.name"/>
-                                    <div t-if="!searchQuery" class="o_home_app_drag_hint">
+                                    <div t-if="!state.searchQuery" class="o_home_app_drag_hint">
                                         <i class="fa fa-arrows"/>
                                     </div>
                                 </div>
@@ -128,7 +124,6 @@
                 </div>
             </div>
 
-            <!-- Footer -->
             <div class="o_home_footer">
                 <span>Powered by <strong>Odoo Community</strong></span>
                 <span class="o_home_footer_sep">·</span>
@@ -137,8 +132,7 @@
                 <a t-on-click="openSettings" class="o_home_footer_link">Customize Home Screen</a>
             </div>
 
-            <!-- Click outside handler for dropdown -->
-            <div t-if="showUserMenu" class="o_home_overlay" t-on-click="closeUserMenu"/>
+            <div t-if="state.showUserMenu" class="o_home_overlay" t-on-click="closeUserMenu"/>
         </div>
     </t>
 
