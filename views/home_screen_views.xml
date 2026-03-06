@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Client Action for the Home Screen -->
+    <record id="action_home_screen" model="ir.actions.client">
+        <field name="name">Home</field>
+        <field name="tag">web_home_enterprise.HomeScreen</field>
+    </record>
+
+    <!-- Top-level menu item -->
+    <record id="menu_home_screen" model="ir.ui.menu">
+        <field name="name">Home</field>
+        <field name="action" ref="action_home_screen"/>
+        <field name="sequence">1</field>
+        <field name="web_icon">web_home_enterprise,static/src/img/home_icon.svg</field>
+    </record>
+</odoo>
