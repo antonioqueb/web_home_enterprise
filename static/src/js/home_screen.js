@@ -3,7 +3,6 @@
 import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
-import { session } from "@web/session";
 
 // ============================================================
 // HELPERS
@@ -58,6 +57,33 @@ export class HomeScreen extends Component {
         this.action   = useService("action");
         this.menu     = useService("menu");
 
+        // Obtener datos del usuario de forma segura para Odoo 19
+        // user service es la forma moderna; session es fallback
+        let userService = null;
+        try {
+            userService = useService("user");
+        } catch (_e) {
+            // user service might not exist in all versions
+        }
+
+        const uid = userService?.userId || (typeof session !== 'undefined' ? session.uid : null) || false;
+        const userName = userService?.name || this._getSessionProp("name") || "Usuario";
+        const userLogin = userService?.login || this._getSessionProp("login") || "";
+        const companyId = userService?.companyId || this._getSessionProp("company_id") || false;
+
+        // company_name: en Odoo 19 puede estar en user_companies o no existir directamente
+        let companyName = "Odoo";
+        try {
+            const companies = this._getSessionProp("user_companies");
+            if (companies && companies.current_company) {
+                companyName = companies.current_company.name || companies.current_company[1] || "Odoo";
+            } else {
+                companyName = this._getSessionProp("company_name") || "Odoo";
+            }
+        } catch (_e) {
+            companyName = this._getSessionProp("company_name") || "Odoo";
+        }
+
         this.state = useState({
             apps: [],
             filteredApps: [],
@@ -67,19 +93,22 @@ export class HomeScreen extends Component {
             draggingId: null,
             dragOverId: null,
             // User info
-            userName:    session.name || 'Usuario',
-            userEmail:   session.partner_display_name || '',
-            userAvatar:  session.uid ? `/web/image/res.users/${session.uid}/avatar_128` : null,
-            companyName: session.company_name || 'Odoo',
+            userName,
+            userEmail: userLogin,
+            userAvatar: uid ? `/web/image/res.users/${uid}/avatar_128` : null,
+            companyName,
             companyLogo: null,
         });
 
+        this._uid = uid;
+        this._companyId = companyId;
         this._dragSrcApp = null;
         this._userAppOrder = [];
         this._clickOutside = this._onClickOutside.bind(this);
 
         onMounted(async () => {
             await this._loadCompanyLogo();
+            await this._loadUserInfo();
             await this._loadSettings();
             await this._loadApps();
             document.addEventListener('click', this._clickOutside, true);
@@ -88,6 +117,19 @@ export class HomeScreen extends Component {
         onWillUnmount(() => {
             document.removeEventListener('click', this._clickOutside, true);
         });
+    }
+
+    /**
+     * Acceso seguro a propiedades de session sin importar directamente
+     * para evitar que un import roto quiebre todo el bundle.
+     */
+    _getSessionProp(prop) {
+        try {
+            // session se importa dinámicamente como fallback
+            const mod = owl?.__session || window.__session;
+            if (mod && mod[prop] !== undefined) return mod[prop];
+        } catch (_e) { /* ignore */ }
+        return undefined;
     }
 
     // ============================================================
@@ -105,11 +147,29 @@ export class HomeScreen extends Component {
 
     async _loadCompanyLogo() {
         try {
-            const cid = session.company_id;
-            if (cid) {
-                this.state.companyLogo = `/web/image/res.company/${cid}/logo`;
+            if (this._companyId) {
+                this.state.companyLogo = `/web/image/res.company/${this._companyId}/logo`;
             }
-        } catch (e) { /* ignore */ }
+        } catch (_e) { /* ignore */ }
+    }
+
+    /**
+     * Carga datos reales del usuario desde el controller (email, nombre, company).
+     * Esto es más confiable que depender de session properties que varían entre versiones.
+     */
+    async _loadUserInfo() {
+        try {
+            const res = await fetch('/web/home/get_settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', method: 'call', id: 1, params: {} }),
+            });
+            const data = await res.json();
+            const s = data.result || {};
+            if (s.user_name) this.state.userName = s.user_name;
+            if (s.user_email) this.state.userEmail = s.user_email;
+            if (s.company_name) this.state.companyName = s.company_name;
+        } catch (_e) { /* ignore, keep defaults */ }
     }
 
     async _loadSettings() {
@@ -122,7 +182,7 @@ export class HomeScreen extends Component {
             const data = await res.json();
             const s = data.result || {};
             this._userAppOrder = JSON.parse(s.app_order || '[]');
-        } catch (e) {
+        } catch (_e) {
             this._userAppOrder = [];
         }
     }
@@ -132,8 +192,25 @@ export class HomeScreen extends Component {
     // ============================================================
 
     async _loadApps() {
+        // Estrategia 1: menu service (más estable en Odoo 19)
         try {
-            // Estrategia 1: load_menus que devuelve toda la data incluyendo web_icon_data
+            const menus = this.menu.getApps ? this.menu.getApps() : null;
+            if (menus && menus.length) {
+                const apps = menus.map(m => this._menuServiceToApp(m)).filter(Boolean);
+                if (apps.length) {
+                    const ordered = this._applyUserOrder(apps);
+                    this.state.apps = ordered;
+                    this.state.filteredApps = [...ordered];
+                    this.state.loading = false;
+                    return;
+                }
+            }
+        } catch (_e) {
+            console.warn('[HomeScreen] menu.getApps() not available, trying load_menus');
+        }
+
+        // Estrategia 2: load_menus RPC
+        try {
             const menuData = await this.orm.call('ir.ui.menu', 'load_menus', [false]);
             if (menuData && menuData.root) {
                 const apps = [];
@@ -151,26 +228,62 @@ export class HomeScreen extends Component {
                     return;
                 }
             }
-        } catch (e) {
-            console.warn('[HomeScreen] load_menus failed, trying menu service', e);
+        } catch (_e) {
+            console.warn('[HomeScreen] load_menus failed, trying menu service tree');
         }
 
-        // Estrategia 2: menu service tree
+        // Estrategia 3: menu service tree (fallback legacy)
         try {
-            const menuData = this.menu.getMenuAsTree("root");
-            const apps = this._processMenuTree(menuData);
-            if (apps.length) {
-                const ordered = this._applyUserOrder(apps);
-                this.state.apps = ordered;
-                this.state.filteredApps = [...ordered];
-                this.state.loading = false;
-                return;
+            const menuData = this.menu.getMenuAsTree
+                ? this.menu.getMenuAsTree("root")
+                : null;
+            if (menuData) {
+                const apps = this._processMenuTree(menuData);
+                if (apps.length) {
+                    const ordered = this._applyUserOrder(apps);
+                    this.state.apps = ordered;
+                    this.state.filteredApps = [...ordered];
+                    this.state.loading = false;
+                    return;
+                }
             }
-        } catch (e) {
-            console.warn('[HomeScreen] menu service failed', e);
+        } catch (_e) {
+            console.warn('[HomeScreen] all menu strategies failed');
         }
 
         this.state.loading = false;
+    }
+
+    /**
+     * Convierte un item de menu.getApps() a nuestro formato de app.
+     */
+    _menuServiceToApp(menu) {
+        if (!menu || !menu.id) return null;
+        let iconUrl = null;
+        let iconData = null;
+
+        if (menu.webIconData) {
+            iconData = menu.webIconData;
+        } else if (menu.webIcon) {
+            iconUrl = this._resolveWebIcon(menu.id, menu.webIcon);
+        }
+
+        if (!iconData && !iconUrl) {
+            iconUrl = `/web/image/ir.ui.menu/${menu.id}/web_icon_data`;
+        }
+
+        return {
+            id: menu.id,
+            name: menu.label || menu.name || '',
+            xmlid: menu.xmlid || '',
+            actionId: menu.actionID || menu.action || null,
+            webIcon: menu.webIcon || null,
+            iconUrl,
+            iconData,
+            faIcon: this._getFaIcon(menu.webIcon),
+            color: getAppColor(menu.id),
+            initials: getInitials(menu.label || menu.name || ''),
+        };
     }
 
     _buildAppEntry(menuId, menu) {
@@ -182,28 +295,11 @@ export class HomeScreen extends Component {
         let iconData = null;
 
         if (menu.web_icon_data) {
-            // Base64 directo — más confiable
             iconData = menu.web_icon_data;
         } else if (menu.web_icon) {
-            const parts = menu.web_icon.split(',');
-            if (parts.length === 2) {
-                const [mod, icon] = parts.map(p => p.trim());
-                if (icon.startsWith('fa-')) {
-                    // Font Awesome — sin imagen, usa fallback con color
-                    iconUrl = null;
-                } else if (icon.startsWith('/')) {
-                    // Ruta absoluta — usar directamente sin concatenar módulo
-                    iconUrl = icon;
-                } else {
-                    // Ruta relativa — construir correctamente
-                    iconUrl = `/${mod}/static/description/${icon}`;
-                }
-            } else if (menu.web_icon.startsWith('/') || menu.web_icon.startsWith('http')) {
-                iconUrl = menu.web_icon;
-            }
+            iconUrl = this._resolveWebIcon(menuId, menu.web_icon);
         }
 
-        // Fallback al endpoint correcto (web_icon_data, no web_icon)
         if (!iconData && !iconUrl) {
             iconUrl = `/web/image/ir.ui.menu/${menuId}/web_icon_data`;
         }
@@ -220,6 +316,22 @@ export class HomeScreen extends Component {
             color: getAppColor(menuId),
             initials: getInitials(menu.name),
         };
+    }
+
+    /**
+     * Resuelve web_icon string a URL usable.
+     */
+    _resolveWebIcon(menuId, webIcon) {
+        if (!webIcon) return null;
+        const parts = webIcon.split(',');
+        if (parts.length === 2) {
+            const [mod, icon] = parts.map(p => p.trim());
+            if (icon.startsWith('fa-')) return null; // Font Awesome, no URL
+            if (icon.startsWith('/')) return icon;    // Ruta absoluta
+            return `/${mod}/static/description/${icon}`;
+        }
+        if (webIcon.startsWith('/') || webIcon.startsWith('http')) return webIcon;
+        return null;
     }
 
     _getFaIcon(webIcon) {
@@ -301,18 +413,27 @@ export class HomeScreen extends Component {
 
     openApp(ev, app) {
         ev.stopPropagation();
-        const menuMethods = ['selectMenu', 'selectAppMenu', 'toggleMenu'];
-        for (const method of menuMethods) {
+
+        // Odoo 19: selectMenu es el método estándar
+        if (typeof this.menu.selectMenu === 'function') {
+            try {
+                this.menu.selectMenu(app.id);
+                return;
+            } catch (_e) { /* fallback */ }
+        }
+
+        // Odoo 18/legacy: otros métodos posibles
+        const fallbackMethods = ['selectAppMenu', 'setCurrentMenu'];
+        for (const method of fallbackMethods) {
             if (typeof this.menu[method] === 'function') {
                 try {
                     this.menu[method](app.id);
                     return;
-                } catch (e) {
-                    // siguiente método
-                }
+                } catch (_e) { /* siguiente */ }
             }
         }
-        // Fallback: navegar directamente al xmlid
+
+        // Fallback final: navegar por URL o action
         if (app.xmlid) {
             window.location.href = `/odoo/${app.xmlid.replace('.', '/')}`;
         } else if (app.actionId) {
@@ -331,12 +452,19 @@ export class HomeScreen extends Component {
     // ============================================================
 
     openNativeMenu() {
-        const hamburger = document.querySelector(
-            '.o_menu_toggle, .o_main_navbar .o_menu_toggle, button.o_menu_toggle'
-        );
-        if (hamburger) {
-            hamburger.click();
-            return;
+        // Odoo 19 puede usar distintos selectores para el hamburger
+        const selectors = [
+            '.o_menu_toggle',
+            '.o_main_navbar .o_menu_toggle',
+            'button.o_menu_toggle',
+            '.o_navbar_apps_menu button',
+        ];
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                el.click();
+                return;
+            }
         }
         document.dispatchEvent(new CustomEvent('toggle-home-menu', { bubbles: true }));
     }
@@ -367,7 +495,7 @@ export class HomeScreen extends Component {
         this.action.doAction({
             type: 'ir.actions.act_window',
             res_model: 'res.users',
-            res_id: session.uid,
+            res_id: this._uid,
             views: [[false, 'form']],
             view_mode: 'form',
             target: 'new',
@@ -444,8 +572,8 @@ export class HomeScreen extends Component {
                     params: { order_json: JSON.stringify(order) }
                 }),
             });
-        } catch (e) {
-            console.warn('[HomeScreen] Could not save app order', e);
+        } catch (_e) {
+            console.warn('[HomeScreen] Could not save app order');
         }
     }
 }
