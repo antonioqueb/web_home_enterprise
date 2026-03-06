@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!--
+        Acción cliente del HomeScreen.
+        NO creamos ir.ui.menu con parent_id vacío para que NO aparezca
+        como app en el menú de aplicaciones de Odoo.
+    -->
     <record id="action_home_screen" model="ir.actions.client">
-        <field name="name">Home</field>
+        <field name="name">Inicio</field>
         <field name="tag">web_home_enterprise.HomeScreen</field>
-    </record>
-
-    <record id="menu_home_screen" model="ir.ui.menu">
-        <field name="name">Home</field>
-        <field name="action" ref="action_home_screen"/>
-        <field name="sequence">1</field>
+        <field name="target">main</field>
     </record>
 </odoo>
